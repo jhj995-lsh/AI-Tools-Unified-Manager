@@ -95,6 +95,21 @@ cd D:\AI
 
 ## 五、版本管理（Git）
 
+### 首次使用 push/pull 前的准备
+
+`git push` 和 `git pull` 操作的是 `shared` 目录（你的 Skill 和 MCP 配置）。这个目录需要**单独关联一个 GitHub 仓库**：
+
+```powershell
+# 1. 在 GitHub 上创建一个新的空仓库（不要勾选 README）
+# 2. 关联远程仓库
+cd D:\AI\shared
+git remote add origin https://github.com/你的用户名/仓库名.git
+```
+
+> 💡 关联一次即可，之后就可以直接用 `git push` 和 `git pull` 了。如果忘了这一步，脚本会自动提示你操作步骤。
+
+### 日常使用
+
 ```powershell
 # 保存当前修改
 .\manage.ps1 git save "我修改了什么"
@@ -102,7 +117,7 @@ cd D:\AI
 # 一键推送到 GitHub
 .\manage.ps1 git push
 
-# 从 GitHub 拉取最新配置到本地
+# 从 GitHub 拉取最新配置到本地（换电脑后同步用）
 .\manage.ps1 git pull
 
 # 查看历史记录
@@ -156,7 +171,8 @@ description: 这个技能是做什么的
 | 安装 Skill            | `.\manage.ps1 add-skill <来源>`       |
 | 添加 MCP              | `.\manage.ps1 add-mcp`                |
 | 保存修改              | `.\manage.ps1 git save "说明"`        |
-| 发版到 GitHub         | `.\manage.ps1 git push`               |
+| 推送到 GitHub         | `.\manage.ps1 git push`               |
+| 从 GitHub 同步        | `.\manage.ps1 git pull`               |
 | 查看历史              | `.\manage.ps1 git log`                |
 | 回滚版本              | `.\manage.ps1 git rollback <版本号>`  |
 | 测试 MCP              | `.\manage.ps1 test-mcp`               |

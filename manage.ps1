@@ -493,8 +493,15 @@ switch ($Command) {
                 Push-Location $SharedDir
                 $remotes = git remote -v 2>$null
                 if ([string]::IsNullOrWhiteSpace($remotes)) {
-                    Write-Host '  [FAIL] No remote configured.' -ForegroundColor Red
-                    Write-Host '  Run this first: git remote add origin <your-github-url>' -ForegroundColor Yellow
+                    Write-Host '' -ForegroundColor Red
+                    Write-Host '  [!] shared 目录尚未关联远程仓库。' -ForegroundColor Red
+                    Write-Host '' -ForegroundColor Yellow
+                    Write-Host '  请按以下步骤操作：' -ForegroundColor Yellow
+                    Write-Host '    1. 在 GitHub 上创建一个新的空仓库（不要勾选 README）' -ForegroundColor White
+                    Write-Host '    2. 复制仓库地址，然后运行：' -ForegroundColor White
+                    Write-Host ('       cd {0}' -f $SharedDir) -ForegroundColor Cyan
+                    Write-Host '       git remote add origin https://github.com/你的用户名/仓库名.git' -ForegroundColor Cyan
+                    Write-Host '    3. 再次运行 .\manage.ps1 git push 即可推送' -ForegroundColor White
                 } else {
                     Write-Host 'Pushing...' -ForegroundColor Yellow
                     git push -u origin HEAD 2>&1 | Write-Host
@@ -513,8 +520,15 @@ switch ($Command) {
                 Push-Location $SharedDir
                 $remotes = git remote -v 2>$null
                 if ([string]::IsNullOrWhiteSpace($remotes)) {
-                    Write-Host '  [FAIL] No remote configured.' -ForegroundColor Red
-                    Write-Host '  Run this first: git remote add origin <your-github-url>' -ForegroundColor Yellow
+                    Write-Host '' -ForegroundColor Red
+                    Write-Host '  [!] shared 目录尚未关联远程仓库。' -ForegroundColor Red
+                    Write-Host '' -ForegroundColor Yellow
+                    Write-Host '  请按以下步骤操作：' -ForegroundColor Yellow
+                    Write-Host '    1. 在 GitHub 上创建一个新的空仓库（不要勾选 README）' -ForegroundColor White
+                    Write-Host '    2. 复制仓库地址，然后运行：' -ForegroundColor White
+                    Write-Host ('       cd {0}' -f $SharedDir) -ForegroundColor Cyan
+                    Write-Host '       git remote add origin https://github.com/你的用户名/仓库名.git' -ForegroundColor Cyan
+                    Write-Host '    3. 再次运行 .\manage.ps1 git pull 即可拉取' -ForegroundColor White
                 } else {
                     Write-Host 'Pulling...' -ForegroundColor Yellow
                     git pull origin HEAD 2>&1 | Write-Host
