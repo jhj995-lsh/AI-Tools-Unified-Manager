@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    D:\AI 统一管理脚本 - MCP、Skills、Git 版本控制
+    AI Tools Unified Manager - MCP, Skills, Git version control
 .EXAMPLE
     .\manage.ps1 status
     .\manage.ps1 list-mcp
@@ -8,8 +8,8 @@
     .\manage.ps1 show-skill my-skill
     .\manage.ps1 show-mcp my-server
     .\manage.ps1 git log
-    .\manage.ps1 git rollback abc1234
-    .\manage.ps1 git save "备注信息"
+    .\manage.ps1 git save "message"
+    .\manage.ps1 git push
     .\manage.ps1 test-mcp
     .\manage.ps1 help
     .\manage.ps1 version
@@ -22,10 +22,14 @@ param(
     [string[]]$ExtraArgs
 )
 
-$SharedDir = 'D:\AI\shared'
-$BackupDir = 'D:\AI\backups'
-$UserHome  = 'C:\Users\56308'
-$ScriptVersion = '2.0.0'
+# ---- Auto-detect paths (portable, no hardcoded directories) ----
+$RootDir   = $PSScriptRoot
+$SharedDir = Join-Path $RootDir 'shared'
+$BackupDir = Join-Path $RootDir 'backups'
+$UserHome  = $env:USERPROFILE
+$ScriptVersion = '2.1.0'
+
+# ---- Helper Functions ----
 
 function Print-Banner {
     Write-Host ''
@@ -34,9 +38,51 @@ function Print-Banner {
     Write-Host '=========================================' -ForegroundColor Cyan
 }
 
+function Init-Environment {
+    $isNew = $false
+    if (-not (Test-Path $SharedDir)) {
+        New-Item -ItemType Directory -Path $SharedDir | Out-Null
+        $isNew = $true
+        Write-Host '[INIT] Created shared directory.' -ForegroundColor Green
+    }
+
+    $mcpDir = Join-Path $SharedDir 'mcp'
+    if (-not (Test-Path $mcpDir)) {
+        New-Item -ItemType Directory -Path $mcpDir | Out-Null
+        $readme = "### MCP Servers`r`nPlace your custom MCP server folders here."
+        Set-Content (Join-Path $mcpDir 'README.md') $readme -Encoding UTF8
+        Write-Host '[INIT] Created shared\mcp directory.' -ForegroundColor Green
+        $isNew = $true
+    }
+
+    $skillsDir = Join-Path $SharedDir 'skills'
+    if (-not (Test-Path $skillsDir)) {
+        New-Item -ItemType Directory -Path $skillsDir | Out-Null
+        $readme = "### Skills`r`nPlace your downloaded or custom Skills (with SKILL.md) here."
+        Set-Content (Join-Path $skillsDir 'README.md') $readme -Encoding UTF8
+        Write-Host '[INIT] Created shared\skills directory.' -ForegroundColor Green
+        $isNew = $true
+    }
+
+    if (-not (Test-Path $BackupDir)) {
+        New-Item -ItemType Directory -Path $BackupDir | Out-Null
+        Write-Host '[INIT] Created backups directory.' -ForegroundColor Green
+        $isNew = $true
+    }
+
+    if ($isNew -and -not (Test-Path (Join-Path $SharedDir '.git'))) {
+        Push-Location $SharedDir
+        git init | Out-Null
+        git add . 2>$null
+        git commit -m 'init: auto-created folder structure by Unified Manager' 2>$null | Out-Null
+        Pop-Location
+        Write-Host '[INIT] Initialized local Git repository in shared.' -ForegroundColor Green
+    }
+}
+
 function Check-Junction($path, $expectedTarget) {
     if (Test-Path $path) {
-        $item = Get-Item $path -Force
+        $item = Get-Item -LiteralPath $path -Force
         if ($item.LinkType -eq 'Junction') {
             if ($item.Target -match [regex]::Escape($expectedTarget)) {
                 Write-Host ('  [OK]   {0} -> {1}' -f $path, $expectedTarget) -ForegroundColor Green
@@ -57,14 +103,13 @@ function Check-Junction($path, $expectedTarget) {
 
 function Repair-Junction($path, $targetDir) {
     if (Test-Path $path) {
-        $item = Get-Item $path -Force
+        $item = Get-Item -LiteralPath $path -Force
         if ($item.LinkType -eq 'Junction' -and ($item.Target -match [regex]::Escape($targetDir))) {
-            return # Already fine
+            return
         }
-        Remove-Item $path -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue
     }
-    
-    # Ensure parent exists
+
     $parentDir = Split-Path $path
     if (-not (Test-Path $parentDir)) {
         New-Item -ItemType Directory -Path $parentDir -Force | Out-Null
@@ -78,14 +123,18 @@ function Repair-Junction($path, $targetDir) {
     }
 }
 
+# ---- Auto-init on every run ----
+Init-Environment
+
+# ---- Main Command Switch ----
 switch ($Command) {
 
     'help' {
         Print-Banner
         Write-Host '  Usage: ' -NoNewline -ForegroundColor White; Write-Host '.\manage.ps1 <command> [args...]' -ForegroundColor Yellow
         Write-Host ''
-        
-        Write-Host '  --- 🔍 系统状态与查询 ---' -ForegroundColor Cyan
+
+        Write-Host '  --- 查询 ---' -ForegroundColor Cyan
         Write-Host '    status              查看总体状态（链接、MCP、Skill、Git、备份）'
         Write-Host '    list-mcp            列出所有安装的 MCP 服务器'
         Write-Host '    list-skills         列出所有安装的 Skill 技能'
@@ -93,24 +142,25 @@ switch ($Command) {
         Write-Host '    show-skill <name>   查看特定 Skill 的 README/配置'
         Write-Host '    test-mcp            测试所有 MCP 是否能正常启动'
         Write-Host ''
-        
-        Write-Host '  --- 📦 安装与卸载 ---' -ForegroundColor Cyan
-        Write-Host '    add-mcp [name]      从本地配置一个新的 MCP（向导式）'
+
+        Write-Host '  --- 安装与卸载 ---' -ForegroundColor Cyan
+        Write-Host '    add-mcp [name]      添加一个新的 MCP（向导式）'
         Write-Host '    remove-mcp <name>   从所有 AI 工具中卸载该 MCP'
-        Write-Host '    add-skill <源>      安装新技能 (支持 Git URL、Zip 文件、本地目录)'
+        Write-Host '    add-skill <source>  安装新技能 (Git URL / Zip / 本地目录)'
         Write-Host '    remove-skill <name> 删除特定的 Skill 技能'
         Write-Host ''
 
-        Write-Host '  --- 💾 Git 与版本管理 ---' -ForegroundColor Cyan
+        Write-Host '  --- Git 版本管理 ---' -ForegroundColor Cyan
         Write-Host '    git log             查看历史修改记录'
         Write-Host '    git diff            查看当前未保存的修改'
         Write-Host '    git status          查看当前文件状态'
-        Write-Host '    git save "描述"      ✅ 保存所有当前的修改'
-        Write-Host '    git rollback <hash> 🔄 回退到某个历史版本'
-        Write-Host '    git reset           放弃所有未保存的修改！'
+        Write-Host '    git save "msg"      保存所有当前的修改'
+        Write-Host '    git push            一键发版到云端仓库 (GitHub)'
+        Write-Host '    git rollback <hash> 回退到某个历史版本'
+        Write-Host '    git reset           放弃所有未保存的修改'
         Write-Host ''
 
-        Write-Host '  --- 🛠️ 维护与系统 ---' -ForegroundColor Cyan
+        Write-Host '  --- 维护与系统 ---' -ForegroundColor Cyan
         Write-Host '    backup              手动触发完整目录备份'
         Write-Host '    repair              自动修复缺失的符号链接 (Junction)'
         Write-Host '    version             显示管理脚本版本'
@@ -118,14 +168,14 @@ switch ($Command) {
     }
 
     'version' {
-        Write-Host ('D:\AI Unified Management Script v{0}' -f $ScriptVersion) -ForegroundColor Cyan
+        Write-Host ('Unified Management Script v{0}' -f $ScriptVersion) -ForegroundColor Cyan
     }
 
     'status' {
         Print-Banner
         Write-Host '[Junction Links]' -ForegroundColor Yellow
         Check-Junction (Join-Path $UserHome '.claude\MCP')    (Join-Path $SharedDir 'mcp') | Out-Null
-        Check-Junction (Join-Path $UserHome '.agents\skills') (Join-Path $SharedDir 'skills') | Out-Null
+        Check-Junction (Join-Path $UserHome '.claude\skills') (Join-Path $SharedDir 'skills') | Out-Null
         Check-Junction (Join-Path $UserHome '.gemini\skills') (Join-Path $SharedDir 'skills') | Out-Null
         Check-Junction (Join-Path $UserHome '.codex\skills')  (Join-Path $SharedDir 'skills') | Out-Null
 
@@ -137,42 +187,31 @@ switch ($Command) {
         Write-Host ('  Skills:      {0}' -f $skillCount) -ForegroundColor Green
 
         Write-Host ''
-        Write-Host '[Custom Skills Status]' -ForegroundColor Yellow
-        $customs = @('A_ihr-sync-fix', 'A_mid-sync-fix', 'A_ps-core-fix', 'A_ps-dev-guide')
-        foreach ($s in $customs) {
-            $p = Join-Path $SharedDir "skills\$s\SKILL.md"
-            if (Test-Path $p) {
-                $head = Get-Content $p -TotalCount 1
-                if ($head -eq '---') {
-                    Write-Host ('  [OK]   {0} (YAML frontmatter OK)' -f $s) -ForegroundColor Green
-                } else {
-                    Write-Host ('  [WARN] {0} (missing --- frontmatter)' -f $s) -ForegroundColor Red
-                }
-            } else {
-                Write-Host ('  [MISS] {0} not found' -f $s) -ForegroundColor Red
-            }
-        }
-
-        Write-Host ''
         Write-Host '[Git Status]' -ForegroundColor Yellow
-        Push-Location $SharedDir
-        $branch = git rev-parse --abbrev-ref HEAD 2>$null
-        $commit = git log -1 --format='%h %s' 2>$null
-        $dirty  = @(git status --porcelain 2>$null)
-        Write-Host ('  Branch: {0}' -f $branch)
-        Write-Host ('  Latest: {0}' -f $commit)
-        if ($dirty.Count -gt 0) {
-            Write-Host ('  Uncommitted: {0} file(s) - Use "git save" to preserve' -f $dirty.Count) -ForegroundColor Yellow
+        if (Test-Path (Join-Path $SharedDir '.git')) {
+            Push-Location $SharedDir
+            $branch = git rev-parse --abbrev-ref HEAD 2>$null
+            $commit = git log -1 --format='%h %s' 2>$null
+            $dirty  = @(git status --porcelain 2>$null)
+            Write-Host ('  Branch: {0}' -f $branch)
+            Write-Host ('  Latest: {0}' -f $commit)
+            if ($dirty.Count -gt 0) {
+                Write-Host ('  Uncommitted: {0} file(s)' -f $dirty.Count) -ForegroundColor Yellow
+            } else {
+                Write-Host '  Working tree: clean' -ForegroundColor Green
+            }
+            Pop-Location
         } else {
-            Write-Host '  Working tree: clean' -ForegroundColor Green
+            Write-Host '  Not a git repository yet.' -ForegroundColor Yellow
         }
-        Pop-Location
 
         Write-Host ''
         Write-Host '[Backups]' -ForegroundColor Yellow
         if (Test-Path $BackupDir) {
             $backups = Get-ChildItem $BackupDir -Directory | Sort-Object Name -Descending | Select-Object -First 3
-            foreach ($b in $backups) { Write-Host ('  {0}' -f $b.Name) }
+            if ($backups.Count -gt 0) {
+                foreach ($b in $backups) { Write-Host ('  {0}' -f $b.Name) }
+            } else { Write-Host '  No backups yet' }
         } else {
             Write-Host '  No backups found' -ForegroundColor Yellow
         }
@@ -183,7 +222,7 @@ switch ($Command) {
         Write-Host ''
         Write-Host '=== Repairing Junction Links ===' -ForegroundColor Cyan
         Repair-Junction (Join-Path $UserHome '.claude\MCP')    (Join-Path $SharedDir 'mcp')
-        Repair-Junction (Join-Path $UserHome '.agents\skills') (Join-Path $SharedDir 'skills')
+        Repair-Junction (Join-Path $UserHome '.claude\skills') (Join-Path $SharedDir 'skills')
         Repair-Junction (Join-Path $UserHome '.gemini\skills') (Join-Path $SharedDir 'skills')
         Repair-Junction (Join-Path $UserHome '.codex\skills')  (Join-Path $SharedDir 'skills')
         Write-Host 'Repair complete!' -ForegroundColor Green
@@ -206,7 +245,7 @@ switch ($Command) {
         }
         $mcpName = $ExtraArgs[0]
         $mcpDir = Join-Path $SharedDir "mcp\$mcpName"
-        
+
         Write-Host ''
         Write-Host ("=== Details for MCP: $mcpName ===") -ForegroundColor Cyan
         if (-not (Test-Path $mcpDir)) {
@@ -215,20 +254,29 @@ switch ($Command) {
         }
 
         Write-Host "Location: $mcpDir"
-        $files = Get-ChildItem $mcpDir -File | Select-Object Name -ExpandProperty Name
+        $files = Get-ChildItem $mcpDir -File | Select-Object -ExpandProperty Name
         Write-Host "Files: " -NoNewline; Write-Host ($files -join ', ') -ForegroundColor Green
-        
-        Write-Host "`n[Configuration Check]" -ForegroundColor Yellow
+
+        Write-Host ''
+        Write-Host '[Configuration Check]' -ForegroundColor Yellow
         $claudeFile = Join-Path $UserHome '.claude\.mcp.json'
-        try {
-            $claude = Get-Content $claudeFile -Raw | ConvertFrom-Json
-            if ($null -ne $claude.mcpServers.$mcpName) {
-                Write-Host ('  [Claude] Found: command = {0}' -f $claude.mcpServers.$mcpName.command) -ForegroundColor Green
-                Write-Host ('           args    = {0}' -f ($claude.mcpServers.$mcpName.args -join ' '))
-            } else {
-                Write-Host '  [Claude] Not configured' -ForegroundColor Red
-            }
-        } catch {}
+        if (Test-Path $claudeFile) {
+            try {
+                $claude = Get-Content $claudeFile -Raw | ConvertFrom-Json
+                if ($null -ne $claude.mcpServers.$mcpName) {
+                    Write-Host ('  [Claude] Found: command = {0}' -f $claude.mcpServers.$mcpName.command) -ForegroundColor Green
+                } else { Write-Host '  [Claude] Not configured' -ForegroundColor DarkGray }
+            } catch {}
+        }
+        $geminiFile = Join-Path $UserHome '.gemini\settings.json'
+        if (Test-Path $geminiFile) {
+            try {
+                $gem = Get-Content $geminiFile -Raw | ConvertFrom-Json
+                if ($null -ne $gem.mcpServers.$mcpName) {
+                    Write-Host ('  [Gemini] Found: command = {0}' -f $gem.mcpServers.$mcpName.command) -ForegroundColor Green
+                } else { Write-Host '  [Gemini] Not configured' -ForegroundColor DarkGray }
+            } catch {}
+        }
         Write-Host ''
     }
 
@@ -239,72 +287,66 @@ switch ($Command) {
         }
         $mcpName = $ExtraArgs[0]
         $mcpDir = Join-Path $SharedDir "mcp\$mcpName"
-        
+
         if (-not (Test-Path $mcpDir)) {
             Write-Host ("MCP directory not found: $mcpDir") -ForegroundColor Red
-            # Still proceed to clean configs just in case
         } else {
-            $confirm = Read-Host ("Remove MCP folder '$mcpName' and its configs? (y/N)")
+            $confirm = Read-Host ("Remove MCP '$mcpName' and its configs? (y/N)")
             if ($confirm -notmatch '^[yY]') { return }
-            Remove-Item $mcpDir -Recurse -Force
+            Remove-Item -LiteralPath $mcpDir -Recurse -Force
             Write-Host ("Removed directory $mcpDir") -ForegroundColor Green
         }
-        
-        Write-Host "Removing from configs..." -ForegroundColor Yellow
-        
-        # Claude
+
+        Write-Host 'Removing from configs...' -ForegroundColor Yellow
+
         $f = Join-Path $UserHome '.claude\.mcp.json'
         if (Test-Path $f) {
             $obj = Get-Content $f -Raw | ConvertFrom-Json
             if ($null -ne $obj.mcpServers.$mcpName) {
                 $obj.mcpServers.PSObject.Properties.Remove($mcpName)
                 $obj | ConvertTo-Json -Depth 10 | Set-Content $f -Encoding UTF8
-                Write-Host "  [OK] Removed from Claude" -ForegroundColor Green
+                Write-Host '  [OK] Removed from Claude' -ForegroundColor Green
             }
         }
 
-        # Gemini
         $f = Join-Path $UserHome '.gemini\settings.json'
         if (Test-Path $f) {
             $obj = Get-Content $f -Raw | ConvertFrom-Json
             if ($null -ne $obj.mcpServers.$mcpName) {
                 $obj.mcpServers.PSObject.Properties.Remove($mcpName)
                 $obj | ConvertTo-Json -Depth 10 | Set-Content $f -Encoding UTF8
-                Write-Host "  [OK] Removed from Gemini" -ForegroundColor Green
+                Write-Host '  [OK] Removed from Gemini' -ForegroundColor Green
             }
         }
 
-        # OpenCode
         $f = Join-Path $UserHome '.config\opencode\opencode.json'
         if (Test-Path $f) {
             $obj = Get-Content $f -Raw | ConvertFrom-Json
             if ($null -ne $obj.mcp.$mcpName) {
                 $obj.mcp.PSObject.Properties.Remove($mcpName)
                 $obj | ConvertTo-Json -Depth 10 | Set-Content $f -Encoding UTF8
-                Write-Host "  [OK] Removed from OpenCode" -ForegroundColor Green
+                Write-Host '  [OK] Removed from OpenCode' -ForegroundColor Green
             }
         }
-        
-        # Codex (TOML removal is tricky, requires manual string manipulation)
+
         $f = Join-Path $UserHome '.codex\config.toml'
         if (Test-Path $f) {
-            # Basic attempt to replace block block
             $content = Get-Content $f -Raw
-            # Match [mcp_servers.name] and anything up until next [mcp_servers OR end string
             $pattern = '(?m)(?s)\[mcp_servers\.' + [regex]::Escape($mcpName) + '\].*?(?=\[mcp_servers|$)'
             if ($content -match $pattern) {
                 $content = $content -replace $pattern, ''
                 Set-Content $f -Value $content.TrimEnd() -Encoding UTF8
-                Write-Host "  [OK] Removed from Codex" -ForegroundColor Green
+                Write-Host '  [OK] Removed from Codex' -ForegroundColor Green
             }
         }
 
-        # Git commit
-        Push-Location $SharedDir
-        git add -A
-        git commit -m ("remove-mcp: " + $mcpName) 2>&1 | Out-Null
-        Pop-Location
-        Write-Host "Removal complete & committed!" -ForegroundColor Green
+        if (Test-Path (Join-Path $SharedDir '.git')) {
+            Push-Location $SharedDir
+            git add -A
+            git commit -m ("remove-mcp: " + $mcpName) 2>&1 | Out-Null
+            Pop-Location
+        }
+        Write-Host 'Removal complete!' -ForegroundColor Green
         Write-Host ''
     }
 
@@ -332,7 +374,7 @@ switch ($Command) {
         }
         $skillName = $ExtraArgs[0]
         $skillDir = Join-Path $SharedDir "skills\$skillName"
-        
+
         Write-Host ''
         Write-Host ("=== Details for Skill: $skillName ===") -ForegroundColor Cyan
         if (-not (Test-Path $skillDir)) {
@@ -342,11 +384,11 @@ switch ($Command) {
 
         $skillMd = Join-Path $skillDir 'SKILL.md'
         if (Test-Path $skillMd) {
-            Write-Host "SKILL.md content (first 10 lines):" -ForegroundColor Yellow
+            Write-Host 'SKILL.md content (first 10 lines):' -ForegroundColor Yellow
             Get-Content $skillMd -TotalCount 10 | ForEach-Object { Write-Host "  $_" }
-            Write-Host "  ..."
+            Write-Host '  ...'
         } else {
-            Write-Host "[WARN] SKILL.md not found!" -ForegroundColor Red
+            Write-Host '[WARN] SKILL.md not found!' -ForegroundColor Red
         }
         Write-Host ''
     }
@@ -358,24 +400,25 @@ switch ($Command) {
         }
         $skillName = $ExtraArgs[0]
         $skillDir = Join-Path $SharedDir "skills\$skillName"
-        
+
         if (-not (Test-Path $skillDir)) {
             Write-Host ("Skill directory not found: $skillDir") -ForegroundColor Red
             return
         }
-        
-        $confirm = Read-Host ("Remove skill folder '$skillName'? (y/N)")
+
+        $confirm = Read-Host ("Remove skill '$skillName'? (y/N)")
         if ($confirm -notmatch '^[yY]') { return }
-        
-        Remove-Item $skillDir -Recurse -Force
-        Write-Host ("Removed directory $skillDir") -ForegroundColor Green
-        
-        # Git commit
-        Push-Location $SharedDir
-        git add -A
-        git commit -m ("remove-skill: " + $skillName) 2>&1 | Out-Null
-        Pop-Location
-        Write-Host "Removal complete & committed!" -ForegroundColor Green
+
+        Remove-Item -LiteralPath $skillDir -Recurse -Force
+        Write-Host ("Removed: $skillDir") -ForegroundColor Green
+
+        if (Test-Path (Join-Path $SharedDir '.git')) {
+            Push-Location $SharedDir
+            git add -A
+            git commit -m ("remove-skill: " + $skillName) 2>&1 | Out-Null
+            Pop-Location
+        }
+        Write-Host 'Removal complete!' -ForegroundColor Green
         Write-Host ''
     }
 
@@ -383,22 +426,21 @@ switch ($Command) {
         Write-Host ''
         Write-Host '=== Creating Manual Backup ===' -ForegroundColor Cyan
         if (-not (Test-Path $BackupDir)) { New-Item -ItemType Directory -Path $BackupDir | Out-Null }
-        
+
         $ts = Get-Date -Format 'yyyyMMdd_HHmmss'
         $destDir = Join-Path $BackupDir "manual_backup_$ts"
         New-Item -ItemType Directory -Path $destDir | Out-Null
-        
-        Write-Host "Backing up configs..." -ForegroundColor Yellow
+
+        Write-Host 'Backing up configs...' -ForegroundColor Yellow
         Copy-Item (Join-Path $UserHome '.claude\.mcp.json') (Join-Path $destDir 'claude_mcp.json') -Force -ErrorAction SilentlyContinue
         Copy-Item (Join-Path $UserHome '.gemini\settings.json') (Join-Path $destDir 'gemini_settings.json') -Force -ErrorAction SilentlyContinue
         Copy-Item (Join-Path $UserHome '.codex\config.toml') (Join-Path $destDir 'codex_config.toml') -Force -ErrorAction SilentlyContinue
         Copy-Item (Join-Path $UserHome '.config\opencode\opencode.json') (Join-Path $destDir 'opencode_config.json') -Force -ErrorAction SilentlyContinue
-        
-        Write-Host "Backing up shared folder..." -ForegroundColor Yellow
-        # Only copy if we want entirely full backups... let's just create a zip to save space
+
+        Write-Host 'Backing up shared folder...' -ForegroundColor Yellow
         $zipPath = Join-Path $destDir 'shared_folder.zip'
         Compress-Archive -Path $SharedDir -DestinationPath $zipPath -Force
-        
+
         Write-Host ("Backup created at: $destDir") -ForegroundColor Green
         Write-Host ''
     }
@@ -406,8 +448,12 @@ switch ($Command) {
     'git' {
         $sub = if ($ExtraArgs.Count -gt 0) { $ExtraArgs[0] } else { 'status' }
 
-        switch ($sub) {
+        if (-not (Test-Path (Join-Path $SharedDir '.git'))) {
+            Write-Host "Error: Git is not initialized in $SharedDir" -ForegroundColor Red
+            return
+        }
 
+        switch ($sub) {
             'log' {
                 Write-Host ''
                 Write-Host '=== Git Commit History ===' -ForegroundColor Cyan
@@ -416,20 +462,17 @@ switch ($Command) {
                 Pop-Location
                 Write-Host ''
             }
-
             'diff' {
                 Push-Location $SharedDir
                 git diff
                 git diff --cached
                 Pop-Location
             }
-
             'status' {
                 Push-Location $SharedDir
                 git status
                 Pop-Location
             }
-
             'save' {
                 $msg = if ($ExtraArgs.Count -gt 1) {
                     ($ExtraArgs[1..($ExtraArgs.Count-1)]) -join ' '
@@ -443,22 +486,38 @@ switch ($Command) {
                 Write-Host ''
                 Write-Host ('Saved: {0}' -f $msg) -ForegroundColor Green
             }
-
+            'push' {
+                Write-Host ''
+                Write-Host '=== Pushing to Remote Repository ===' -ForegroundColor Cyan
+                Push-Location $SharedDir
+                $remotes = git remote -v 2>$null
+                if ([string]::IsNullOrWhiteSpace($remotes)) {
+                    Write-Host '  [FAIL] No remote configured.' -ForegroundColor Red
+                    Write-Host '  Run this first: git remote add origin <your-github-url>' -ForegroundColor Yellow
+                } else {
+                    Write-Host 'Pushing...' -ForegroundColor Yellow
+                    git push -u origin HEAD 2>&1 | Write-Host
+                    if ($LASTEXITCODE -eq 0) {
+                        Write-Host '  [OK] Push successful!' -ForegroundColor Green
+                    } else {
+                        Write-Host '  [FAIL] Push failed. See error above.' -ForegroundColor Red
+                    }
+                }
+                Pop-Location
+                Write-Host ''
+            }
             'rollback' {
                 if ($ExtraArgs.Count -lt 2) {
                     Write-Host 'Usage: .\manage.ps1 git rollback <commitHash>' -ForegroundColor Yellow
-                    Write-Host 'Tip: run ".\manage.ps1 git log" first to find the commit hash' -ForegroundColor Yellow
                     return
                 }
                 $hash = $ExtraArgs[1]
                 Write-Host ''
-                Write-Host ('About to rollback D:\AI\shared to commit: {0}' -f $hash) -ForegroundColor Yellow
+                Write-Host ('About to rollback to commit: {0}' -f $hash) -ForegroundColor Yellow
                 Write-Host 'This will discard all uncommitted changes!' -ForegroundColor Red
                 $confirm = Read-Host 'Confirm rollback? (y/N)'
-                if ($confirm -notmatch '^[yY]') {
-                    Write-Host 'Cancelled.'
-                    return
-                }
+                if ($confirm -notmatch '^[yY]') { return }
+
                 Push-Location $SharedDir
                 $tempBranch = 'backup-' + (Get-Date -Format 'yyyyMMdd-HHmmss')
                 git stash -u 2>$null
@@ -471,25 +530,20 @@ switch ($Command) {
                 Write-Host ''
                 Write-Host ('Rollback complete! To undo, switch to branch: {0}' -f $tempBranch) -ForegroundColor Green
             }
-
             'reset' {
                 Write-Host ''
-                Write-Host 'About to discard all uncommitted changes and restore to latest commit' -ForegroundColor Yellow
+                Write-Host 'About to discard all uncommitted changes' -ForegroundColor Yellow
                 $confirm = Read-Host 'Confirm? (y/N)'
-                if ($confirm -notmatch '^[yY]') {
-                    Write-Host 'Cancelled.'
-                    return
-                }
+                if ($confirm -notmatch '^[yY]') { return }
+
                 Push-Location $SharedDir
                 git checkout -- .
                 git clean -fd
                 Pop-Location
                 Write-Host 'Restored to latest commit.' -ForegroundColor Green
             }
-
             default {
                 Write-Host ('Unknown git subcommand: {0}' -f $sub) -ForegroundColor Red
-                Write-Host 'Available: log, diff, status, save, rollback, reset' -ForegroundColor Yellow
             }
         }
     }
@@ -497,10 +551,10 @@ switch ($Command) {
     'test-mcp' {
         Write-Host ''
         Write-Host '=== Testing MCP Server Startup ===' -ForegroundColor Cyan
+        $mcpRoot = Join-Path $SharedDir 'mcp'
         $servers = @(
-            @{ Name='alpha-midgrp';        Cmd='uv'; CmdArgs='--directory "D:\AI\shared\mcp\alpha-midgrp" run alpha-midgrp' },
-            @{ Name='db-attendance';        Cmd='python'; CmdArgs='D:\AI\shared\mcp\sqlserver_alpha_query\server.py' },
-            @{ Name='oracle-unified-query'; Cmd='python'; CmdArgs='D:\AI\shared\mcp\oracle_unified_query\server.py' }
+            @{ Name='alpha-midgrp';        Cmd='uv'; CmdArgs=('--directory "' + (Join-Path $mcpRoot 'alpha-midgrp') + '" run alpha-midgrp') },
+            @{ Name='oracle-unified-query'; Cmd='python'; CmdArgs=(Join-Path $mcpRoot 'oracle_unified_query\server.py') }
         )
         foreach ($s in $servers) {
             Write-Host ''
@@ -530,22 +584,20 @@ switch ($Command) {
         Write-Host '=== Add MCP Server to All Tools ===' -ForegroundColor Cyan
         Write-Host ''
 
-        # Collect info
         $mcpName = if ($ExtraArgs.Count -gt 0) { $ExtraArgs[0] } else { Read-Host 'MCP name (e.g. my-new-server)' }
         $mcpCmd  = if ($ExtraArgs.Count -gt 1) { $ExtraArgs[1] } else { Read-Host 'Command (e.g. python)' }
-        $mcpArg  = if ($ExtraArgs.Count -gt 2) { $ExtraArgs[2] } else { Read-Host 'Arguments (e.g. D:\AI\shared\mcp\my-server\server.py)' }
-        
+        $mcpArg  = if ($ExtraArgs.Count -gt 2) { $ExtraArgs[2] } else { Read-Host 'Arguments (e.g. path\to\server.py)' }
+
         $envVars = @{}
         if ($ExtraArgs.Count -gt 3) {
-            # Support var1=val1 var2=val2...
             for ($i = 3; $i -lt $ExtraArgs.Count; $i++) {
                 $parts = $ExtraArgs[$i] -split '=', 2
                 if ($parts.Count -eq 2) { $envVars[$parts[0].Trim()] = $parts[1].Trim() }
             }
         } else {
-            $hasEnv  = Read-Host 'Has environment variables? (y/N)'
+            $hasEnv = Read-Host 'Has environment variables? (y/N)'
             if ($hasEnv -match '^[yY]') {
-                Write-Host 'Enter env vars (format: KEY=VALUE). Empty line to finish:'
+                Write-Host 'Enter env vars (KEY=VALUE). Empty line to finish:'
                 while ($true) {
                     $line = Read-Host '  '
                     if ([string]::IsNullOrWhiteSpace($line)) { break }
@@ -556,43 +608,49 @@ switch ($Command) {
         }
 
         Write-Host ''
-        Write-Host ('Adding "{0}" to all 4 tools...' -f $mcpName) -ForegroundColor Yellow
+        Write-Host ('Adding "{0}" to all tools...' -f $mcpName) -ForegroundColor Yellow
 
-        # -- 1. Claude --
+        # Claude
         $claudeFile = Join-Path $UserHome '.claude\.mcp.json'
         try {
+            if (-not (Test-Path $claudeFile)) {
+                $dir = Split-Path $claudeFile
+                if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+                Set-Content $claudeFile '{"mcpServers":{}}' -Encoding UTF8
+            }
             $claude = Get-Content $claudeFile -Raw | ConvertFrom-Json
             $newServer = @{ command = $mcpCmd; args = @($mcpArg -split ' ') }
             if ($envVars.Count -gt 0) { $newServer['env'] = $envVars }
-            if ($null -eq $claude.mcpServers.$mcpName) {
-                $claude.mcpServers | Add-Member -NotePropertyName $mcpName -NotePropertyValue ([PSCustomObject]$newServer) -Force
-            } else {
-                $claude.mcpServers.$mcpName = ([PSCustomObject]$newServer)
-            }
+            $claude.mcpServers | Add-Member -NotePropertyName $mcpName -NotePropertyValue ([PSCustomObject]$newServer) -Force
             $claude | ConvertTo-Json -Depth 10 | Set-Content $claudeFile -Encoding UTF8
             Write-Host ('  [OK] Claude:   {0}' -f $claudeFile) -ForegroundColor Green
         } catch { Write-Host ('  [FAIL] Claude: {0}' -f $_) -ForegroundColor Red }
 
-        # -- 2. Gemini --
+        # Gemini
         $geminiFile = Join-Path $UserHome '.gemini\settings.json'
         try {
+            if (-not (Test-Path $geminiFile)) {
+                $dir = Split-Path $geminiFile
+                if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+                Set-Content $geminiFile '{"mcpServers":{}}' -Encoding UTF8
+            }
             $gemini = Get-Content $geminiFile -Raw | ConvertFrom-Json
             $newServer = @{ command = $mcpCmd; args = @($mcpArg -split ' '); env = @{}; timeout = 60000 }
             if ($envVars.Count -gt 0) { $newServer['env'] = $envVars }
-            if ($null -eq $gemini.mcpServers.$mcpName) {
-                $gemini.mcpServers | Add-Member -NotePropertyName $mcpName -NotePropertyValue ([PSCustomObject]$newServer) -Force
-            } else {
-                $gemini.mcpServers.$mcpName = ([PSCustomObject]$newServer)
-            }
+            $gemini.mcpServers | Add-Member -NotePropertyName $mcpName -NotePropertyValue ([PSCustomObject]$newServer) -Force
             $gemini | ConvertTo-Json -Depth 10 | Set-Content $geminiFile -Encoding UTF8
             Write-Host ('  [OK] Gemini:   {0}' -f $geminiFile) -ForegroundColor Green
         } catch { Write-Host ('  [FAIL] Gemini: {0}' -f $_) -ForegroundColor Red }
 
-        # -- 3. Codex --
+        # Codex
         $codexFile = Join-Path $UserHome '.codex\config.toml'
         try {
-            $tomlContent = Get-Content $codexFile -Raw
-            # Simply appended config. Might duplicate if user adds same MCP twice. 
+            if (-not (Test-Path $codexFile)) {
+                $dir = Split-Path $codexFile
+                if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+                Set-Content $codexFile '' -Encoding UTF8
+            }
+            $tomlContent = Get-Content $codexFile -Raw -ErrorAction SilentlyContinue
             $argsEsc = ($mcpArg -split ' ' | ForEach-Object { '"{0}"' -f $_ }) -join ', '
             $newBlock = "`n[mcp_servers.{0}]`ntype = `"stdio`"`ncommand = `"{1}`"`nargs = [{2}]`n" -f $mcpName, $mcpCmd, $argsEsc
             if ($envVars.Count -gt 0) {
@@ -604,30 +662,29 @@ switch ($Command) {
             Write-Host ('  [OK] Codex:    {0}' -f $codexFile) -ForegroundColor Green
         } catch { Write-Host ('  [FAIL] Codex:  {0}' -f $_) -ForegroundColor Red }
 
-        # -- 4. OpenCode --
-        $openCodeFile = Join-Path $UserHome '.config\opencode\opencode.json'
+        # OpenCode
+        $ocPath = Join-Path $UserHome '.config\opencode'
+        $openCodeFile = Join-Path $ocPath 'opencode.json'
         try {
+            if (-not (Test-Path $ocPath)) { New-Item -ItemType Directory -Path $ocPath -Force | Out-Null }
+            if (-not (Test-Path $openCodeFile)) { Set-Content $openCodeFile '{"mcp":{}}' -Encoding UTF8 }
             $oc = Get-Content $openCodeFile -Raw | ConvertFrom-Json
             $cmdArr = @($mcpCmd) + @($mcpArg -split ' ')
             $newServer = @{ command = $cmdArr; enabled = $true; type = 'local' }
             if ($envVars.Count -gt 0) { $newServer['environment'] = $envVars }
-            if ($null -eq $oc.mcp.$mcpName) {
-                $oc.mcp | Add-Member -NotePropertyName $mcpName -NotePropertyValue ([PSCustomObject]$newServer) -Force
-            } else {
-                $oc.mcp.$mcpName = ([PSCustomObject]$newServer)
-            }
+            $oc.mcp | Add-Member -NotePropertyName $mcpName -NotePropertyValue ([PSCustomObject]$newServer) -Force
             $oc | ConvertTo-Json -Depth 10 | Set-Content $openCodeFile -Encoding UTF8
             Write-Host ('  [OK] OpenCode: {0}' -f $openCodeFile) -ForegroundColor Green
         } catch { Write-Host ('  [FAIL] OpenCode: {0}' -f $_) -ForegroundColor Red }
 
         Write-Host ''
-        Write-Host ('Done! "{0}" added to all tools. Restart CLI to take effect.' -f $mcpName) -ForegroundColor Green
+        Write-Host ('Done! "{0}" added. Restart CLI to take effect.' -f $mcpName) -ForegroundColor Green
         Write-Host ''
     }
 
     'add-skill' {
         Write-Host ''
-        Write-Host '=== Download & Install Skill ===' -ForegroundColor Cyan
+        Write-Host '=== Download and Install Skill ===' -ForegroundColor Cyan
         Write-Host ''
 
         if ($ExtraArgs.Count -lt 1) {
@@ -638,7 +695,7 @@ switch ($Command) {
             return
         }
 
-        $source   = $ExtraArgs[0]
+        $source    = $ExtraArgs[0]
         $skillsDir = Join-Path $SharedDir 'skills'
 
         if ($ExtraArgs.Count -gt 1) {
@@ -654,11 +711,8 @@ switch ($Command) {
         if (Test-Path $targetDir) {
             Write-Host ('Skill "{0}" already exists at: {1}' -f $skillName, $targetDir) -ForegroundColor Yellow
             $overwrite = Read-Host 'Overwrite? (y/N)'
-            if ($overwrite -notmatch '^[yY]') {
-                Write-Host 'Cancelled.'
-                return
-            }
-            Remove-Item $targetDir -Recurse -Force
+            if ($overwrite -notmatch '^[yY]') { Write-Host 'Cancelled.'; return }
+            Remove-Item -LiteralPath $targetDir -Recurse -Force
         }
 
         $success = $false
@@ -670,8 +724,7 @@ switch ($Command) {
                 git clone --depth 1 $source $tempClone 2>&1 | Write-Host
                 if (Test-Path $tempClone) {
                     $gitDir = Join-Path $tempClone '.git'
-                    if (Test-Path $gitDir) { Remove-Item $gitDir -Recurse -Force }
-
+                    if (Test-Path $gitDir) { Remove-Item -LiteralPath $gitDir -Recurse -Force }
                     $skillMd = Join-Path $tempClone 'SKILL.md'
                     if (Test-Path $skillMd) {
                         Copy-Item $tempClone $targetDir -Recurse -Force
@@ -679,16 +732,15 @@ switch ($Command) {
                     } else {
                         $found = Get-ChildItem $tempClone -Recurse -Filter 'SKILL.md' | Select-Object -First 1
                         if ($found) {
-                            $skillRoot = $found.Directory.FullName
-                            Copy-Item $skillRoot $targetDir -Recurse -Force
+                            Copy-Item -LiteralPath $found.Directory.FullName $targetDir -Recurse -Force
                             $success = $true
                         } else {
                             Copy-Item $tempClone $targetDir -Recurse -Force
                             $success = $true
-                            Write-Host '  [WARN] No SKILL.md found in repo. You may need to create one.' -ForegroundColor Yellow
+                            Write-Host '  [WARN] No SKILL.md found.' -ForegroundColor Yellow
                         }
                     }
-                    Remove-Item $tempClone -Recurse -Force -ErrorAction SilentlyContinue
+                    Remove-Item -LiteralPath $tempClone -Recurse -Force -ErrorAction SilentlyContinue
                 }
             } catch { Write-Host ('  [FAIL] Git clone failed: {0}' -f $_) -ForegroundColor Red }
         }
@@ -699,21 +751,21 @@ switch ($Command) {
                 Expand-Archive -Path $source -DestinationPath $tempExtract -Force
                 $found = Get-ChildItem $tempExtract -Recurse -Filter 'SKILL.md' | Select-Object -First 1
                 if ($found) {
-                    Copy-Item $found.Directory.FullName $targetDir -Recurse -Force
+                    Copy-Item -LiteralPath $found.Directory.FullName $targetDir -Recurse -Force
                 } else {
                     $subDirs = Get-ChildItem $tempExtract -Directory
-                    if ($subDirs.Count -eq 1) { Copy-Item $subDirs[0].FullName $targetDir -Recurse -Force }
-                    else { Copy-Item $tempExtract $targetDir -Recurse -Force }
-                    Write-Host '  [WARN] No SKILL.md found in ZIP. You may need to create one.' -ForegroundColor Yellow
+                    if ($subDirs.Count -eq 1) { Copy-Item -LiteralPath $subDirs[0].FullName $targetDir -Recurse -Force }
+                    else { Copy-Item -LiteralPath $tempExtract $targetDir -Recurse -Force }
+                    Write-Host '  [WARN] No SKILL.md found in ZIP.' -ForegroundColor Yellow
                 }
-                Remove-Item $tempExtract -Recurse -Force -ErrorAction SilentlyContinue
+                Remove-Item -LiteralPath $tempExtract -Recurse -Force -ErrorAction SilentlyContinue
                 $success = $true
             } catch { Write-Host ('  [FAIL] ZIP extraction failed: {0}' -f $_) -ForegroundColor Red }
         }
         elseif (Test-Path $source -PathType Container) {
             Write-Host ('Copying from local: {0}' -f $source) -ForegroundColor Yellow
             try {
-                Copy-Item $source $targetDir -Recurse -Force
+                Copy-Item -LiteralPath $source $targetDir -Recurse -Force
                 $success = $true
             } catch { Write-Host ('  [FAIL] Copy failed: {0}' -f $_) -ForegroundColor Red }
         }
@@ -728,18 +780,20 @@ switch ($Command) {
             if (Test-Path $skillMdPath) {
                 $firstLine = Get-Content $skillMdPath -TotalCount 1
                 if ($firstLine -eq '---') {
-                    Write-Host ('  [OK] SKILL.md frontmatter valid') -ForegroundColor Green
+                    Write-Host '  [OK] SKILL.md frontmatter valid' -ForegroundColor Green
                 } else {
-                    Write-Host ('  [WARN] SKILL.md missing --- frontmatter! Codex will not load this.') -ForegroundColor Red
+                    Write-Host '  [WARN] SKILL.md missing --- frontmatter!' -ForegroundColor Red
                 }
             } else {
-                Write-Host ('  [WARN] No SKILL.md found.') -ForegroundColor Yellow
+                Write-Host '  [WARN] No SKILL.md found.' -ForegroundColor Yellow
             }
 
-            Push-Location $SharedDir
-            git add -A
-            git commit -m ('add-skill: {0} (from {1})' -f $skillName, $source) 2>&1 | Out-Null
-            Pop-Location
+            if (Test-Path (Join-Path $SharedDir '.git')) {
+                Push-Location $SharedDir
+                git add -A
+                git commit -m ('add-skill: {0} (from {1})' -f $skillName, $source) 2>&1 | Out-Null
+                Pop-Location
+            }
 
             Write-Host ''
             Write-Host ('Skill "{0}" installed to: {1}' -f $skillName, $targetDir) -ForegroundColor Green
@@ -751,5 +805,3 @@ switch ($Command) {
         Write-Host ('Unknown command: {0}. Run ".\manage.ps1 help" for usage.' -f $Command) -ForegroundColor Red
     }
 }
-
-
