@@ -99,8 +99,11 @@ cd D:\AI
 # 保存当前修改
 .\manage.ps1 git save "我修改了什么"
 
-# 一键发版到 GitHub
+# 一键推送到 GitHub
 .\manage.ps1 git push
+
+# 从 GitHub 拉取最新配置到本地
+.\manage.ps1 git pull
 
 # 查看历史记录
 .\manage.ps1 git log

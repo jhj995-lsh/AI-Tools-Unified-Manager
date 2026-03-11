@@ -155,7 +155,8 @@ switch ($Command) {
         Write-Host '    git diff            查看当前未保存的修改'
         Write-Host '    git status          查看当前文件状态'
         Write-Host '    git save "msg"      保存所有当前的修改'
-        Write-Host '    git push            一键发版到云端仓库 (GitHub)'
+        Write-Host '    git push            一键推送到云端仓库 (GitHub)'
+        Write-Host '    git pull            从云端拉取最新配置到本地'
         Write-Host '    git rollback <hash> 回退到某个历史版本'
         Write-Host '    git reset           放弃所有未保存的修改'
         Write-Host ''
@@ -501,6 +502,26 @@ switch ($Command) {
                         Write-Host '  [OK] Push successful!' -ForegroundColor Green
                     } else {
                         Write-Host '  [FAIL] Push failed. See error above.' -ForegroundColor Red
+                    }
+                }
+                Pop-Location
+                Write-Host ''
+            }
+            'pull' {
+                Write-Host ''
+                Write-Host '=== Pulling from Remote Repository ===' -ForegroundColor Cyan
+                Push-Location $SharedDir
+                $remotes = git remote -v 2>$null
+                if ([string]::IsNullOrWhiteSpace($remotes)) {
+                    Write-Host '  [FAIL] No remote configured.' -ForegroundColor Red
+                    Write-Host '  Run this first: git remote add origin <your-github-url>' -ForegroundColor Yellow
+                } else {
+                    Write-Host 'Pulling...' -ForegroundColor Yellow
+                    git pull origin HEAD 2>&1 | Write-Host
+                    if ($LASTEXITCODE -eq 0) {
+                        Write-Host '  [OK] Pull successful!' -ForegroundColor Green
+                    } else {
+                        Write-Host '  [FAIL] Pull failed. See error above.' -ForegroundColor Red
                     }
                 }
                 Pop-Location
